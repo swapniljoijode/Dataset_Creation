@@ -1,0 +1,19 @@
+{
+  "fields": [
+    {
+      "key": "num_students",
+      "type": "input",
+      "label": "How many students (max 850)?"
+    },
+    {
+      "key": "school_start",
+      "type": "input",
+      "label": "School start year (e.g. 2010):"
+    },
+    {
+      "key": "subjects",
+      "type": "multiline",
+      "label": "Enter 8 subject names, one per line:"
+    }
+  ]
+}

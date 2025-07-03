@@ -8,7 +8,8 @@ _dependencies = {
     "pandas":  "pandas",
     "faker":   "Faker",
     "mimesis": "mimesis",
-    "tkinter": "tkinter"
+    "tkinter": "tkinter",
+    "gooey":"gooey"
 }
 
 _installed_now = []
@@ -26,12 +27,15 @@ import sys
 from datetime import datetime
 import pandas as pd
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import ttk,messagebox
 from faker import Faker
 from mimesis import Datetime
+from gooey import Gooey, GooeyParser
 
 fake = Faker()
 dt   = Datetime()
+
+
 
 # —————— Core generation functions (as before) ——————
 
@@ -155,54 +159,75 @@ def generate_academic_and_events(students_df, grade_df, start_year, end_year):
             pd.DataFrame(grads),
             pd.DataFrame(term))
 
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("📚 School Records Generator")
+        self.geometry("500x450")
+        self.resizable(False, False)
 
+        # use the 'clam' theme for nicer widgets
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("TLabel", font=("Segoe UI", 10))
+        style.configure("TButton", font=("Segoe UI", 10), padding=6)
+        style.configure("TEntry", font=("Segoe UI", 10))
+        style.map("TButton",
+                  foreground=[("pressed","white"),("active","white")],
+                  background=[("pressed","#1177bb"),("active","#3399dd")])
+
+        frm = ttk.Frame(self, padding=20)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="How many students (min 850)?").grid(row=0, column=0, sticky="w")
+        self.entry_students = ttk.Entry(frm); self.entry_students.grid(row=0, column=1, pady=4)
+
+        ttk.Label(frm, text="School start year (e.g. 2010):").grid(row=1, column=0, sticky="w")
+        self.entry_startyear    = ttk.Entry(frm); self.entry_startyear.grid(row=1, column=1, pady=4)
+
+        ttk.Label(frm, text="Enter 8 subjects (one per line):").grid(
+            row=2, column=0, sticky="nw", pady=4)
+        self.text_subjects = tk.Text(frm, width=30, height=8, font=("Segoe UI",10))
+        self.text_subjects.grid(row=2, column=1, pady=4)
+
+        self.btn = ttk.Button(frm, text="Generate CSVs", command=self.on_generate)
+        self.btn.grid(row=3, column=0, columnspan=2, pady=15, sticky="ew")
+
+        self.status = ttk.Label(frm, text="", foreground="#007700")
+        self.status.grid(row=4, column=0, columnspan=2)
 # —————— 3. GUI wiring ——————
-def run_generation():
-    try:
-        n = int(entry_students.get())
-        school_start = int(entry_startyear.get())
-        subs = [s.strip() for s in text_subjects.get("1.0", tk.END).splitlines() if s.strip()]
-        if len(subs) < 8:
-            messagebox.showerror("Error", "Enter at least 8 subjects.")
-            return
+    def on_generate(self):
+        try:
+            n = int(self.entry_students.get())
+            school_start = int(self.entry_startyear.get())
+            subs = [s.strip() for s in self.text_subjects.get("1.0", tk.END).splitlines() if s.strip()]
+            if len(subs) < 8:
+                messagebox.showerror("Error", "Enter at least 8 subjects.")
+                return
 
-        grade_df = generate_grade_table(subs)
-        det_df   = generate_student_details(n, school_start)
-        enr_df   = generate_student_enrollment(det_df, school_start, n)
-        students = (enr_df
-                    .merge(det_df, on="student_id")
-                    .assign(last_pct=None, fail_count=0, terminated=False))
+            grade_df = generate_grade_table(subs)
+            det_df   = generate_student_details(n, school_start)
+            enr_df   = generate_student_enrollment(det_df, school_start, n)
+            students = (enr_df
+                        .merge(det_df, on="student_id")
+                        .assign(last_pct=None, fail_count=0, terminated=False))
 
-        academic_df, grads_df, term_df = generate_academic_and_events(
-            students, grade_df, school_start, datetime.now().year
-        )
+            academic_df, grads_df, term_df = generate_academic_and_events(
+                students, grade_df, school_start, datetime.now().year
+            )
 
-        grade_df.to_csv("grades.csv", index=False)
-        students.drop(columns=["last_pct","fail_count","terminated"])\
-                .to_csv("students.csv", index=False)
-        academic_df.to_csv("academic.csv", index=False)
-        grads_df.to_csv("graduates.csv", index=False)
-        term_df.to_csv("terminated.csv", index=False)
+            grade_df.to_csv("grades.csv", index=False)
+            students.drop(columns=["last_pct","fail_count","terminated"])\
+                    .to_csv("students.csv", index=False)
+            academic_df.to_csv("academic.csv", index=False)
+            grads_df.to_csv("graduates.csv", index=False)
+            term_df.to_csv("terminated.csv", index=False)
 
-        messagebox.showinfo("Done", "CSV files generated in working folder.")
-    except Exception as e:
-        messagebox.showerror("Error", str(e))
+            messagebox.showinfo("Done", "CSV files generated in working folder.")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 
 
 # build window
-root = tk.Tk()
-root.title("School Dataset Generator")
-
-tk.Label(root, text="How many students (max 850)?").grid(row=0, column=0, sticky="w")
-entry_students = tk.Entry(root); entry_students.grid(row=0, column=1)
-
-tk.Label(root, text="School start year (e.g. 2010):").grid(row=1, column=0, sticky="w")
-entry_startyear = tk.Entry(root); entry_startyear.grid(row=1, column=1)
-
-tk.Label(root, text="Enter 8 subjects (one per line):").grid(row=2, column=0, sticky="nw")
-text_subjects = tk.Text(root, width=30, height=8); text_subjects.grid(row=2, column=1)
-
-btn = tk.Button(root, text="Generate", command=run_generation)
-btn.grid(row=3, column=0, columnspan=2, pady=10)
-
-root.mainloop()
+if __name__ == "__main__":
+    App().mainloop()

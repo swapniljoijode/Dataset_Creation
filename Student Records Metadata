@@ -1,0 +1,68 @@
+Below is the updated metadata catalog for all five final tables.
+
+---
+
+## 1. `grades`
+
+| Column      | Type    | Description                                        | Core Logic / Usage                                                      |
+| ----------- | ------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `grade`     | INTEGER | School grade level (1–8)                           | Loop over grades 1–8 to generate subjects.                              |
+| `subject`   | STRING  | Name of a subject offered in this grade            | First 3 are “mandatory”; for grades 4–8 pick 0–2 “optionals” at random. |
+| `min_marks` | INTEGER | Minimum possible marks for this subject (always 0) | Static 0                                                                |
+| `max_marks` | INTEGER | Maximum marks for this subject (always 100)        | Static 100                                                              |
+
+---
+
+## 2. `students`
+
+*(merged details + enrollment + tracking)*
+
+| Column              | Type    | Description                                                           | Core Logic / Usage                                                                              |
+| ------------------- | ------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `student_id`        | INT64   | Unique student key: `birth_year * multiplier + seq`                   | Embeds birth year and unique sequence. `multiplier` = 100 or 1000 based on cohort size.         |
+| `enrollment_id`     | INT64   | Unique enrollment key: `enrollment_year * multiplier + seq`           | Embeds the enrollment year for easy partitioning.                                               |
+| `enrollment_status` | STRING  | “new” or “transfer-in”                                                | New → age 2 enrollment; Transfer → random between age 3–10, bounded by school and current year. |
+| `enrollment_year`   | INT64   | Year of first entry into school                                       | `birth_year+2` for new; random in valid transfer window for transfers.                          |
+| `starting_grade`    | INT64   | Grade entered in first year                                           | New → 1; Transfer → clamp((enrollment\_year – birth\_year) – 2, 1, 8).                          |
+| `first_name`        | STRING  | Faker‐generated first name                                            | —                                                                                               |
+| `last_name`         | STRING  | Faker‐generated last name                                             | —                                                                                               |
+| `birthdate`         | DATE    | Date between `(school_start – 10)` and `(current_year – 2)`           | Ensures students are ≥2 years old by enrollment.                                                |
+| **`last_pct`**      | FLOAT   | Final percentage (0–100) from the most recent academic simulation     | Updated each year; drives class placement and promotion logic.                                  |
+| **`fail_count`**    | INT64   | Consecutive years the student scored <30% in the same grade           | Incremented on each failure (<30); reset to 0 on pass (≥30); triggers termination when ≥3.      |
+| **`terminated`**    | BOOLEAN | Flag indicating student is no longer active (graduated or terminated) | Set to True on graduation (grade 8 pass) or after 3 failures; removed from further simulation.  |
+
+---
+
+## 3. `academic`
+
+| Column                                | Type   | Description                                         | Core Logic / Usage                                                                                  |
+| ------------------------------------- | ------ | --------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `academic_year`                       | INT64  | Calendar year of the academic record                | Loops from `school_start` to current year.                                                          |
+| `enrollment_id`                       | INT64  | FK to `students.enrollment_id`                      | Links back to student demographics and tracking.                                                    |
+| `grade`                               | INT64  | Grade level for this record                         | Starts at `starting_grade` and increments on pass (final\_pct ≥30), otherwise may repeat grade.     |
+| `class`                               | STRING | Section A–D                                         | Based on `last_pct` of prior year: ≥90→A, 70–89→B, 55–69→C, 30–54→D; first year assigned at random. |
+| `final_percentage`                    | FLOAT  | Sum(obtained marks)/Sum(max\_marks)×100             | Simulated by random draws per subject.                                                              |
+| `subject_1_marks` … `subject_5_marks` | INT64  | Scores for up to 5 subjects; NULL if fewer subjects | Based on grade-specific subject list; there are always 3 mandatory + 0–2 optional per grade.        |
+
+---
+
+## 4. `graduates`
+
+| Column                    | Type   | Description                                      | Core Logic / Usage                                 |
+| ------------------------- | ------ | ------------------------------------------------ | -------------------------------------------------- |
+| `enrollment_id`           | INT64  | FK to `students.enrollment_id`                   | Only Grade 8 students with `final_percentage` ≥30. |
+| `first_name`, `last_name` | STRING | Student’s name                                   | Carried through from `students`.                   |
+| `final_pct`               | FLOAT  | Their Grade 8 final percentage                   | From their last `academic` record.                 |
+| `age`                     | INT64  | Age at graduation (academic\_year – birth\_year) | Indicates how many years old at completion.        |
+
+---
+
+## 5. `terminated`
+
+| Column                    | Type   | Description                              | Core Logic / Usage                                                                     |
+| ------------------------- | ------ | ---------------------------------------- | -------------------------------------------------------------------------------------- |
+| `enrollment_id`           | INT64  | FK to `students.enrollment_id`           | Students who accumulated 3 consecutive <30% failures in any grade (including Grade 8). |
+| `first_name`, `last_name` | STRING | Student’s name                           | From `students`.                                                                       |
+| `grade`                   | INT64  | Grade at which they were terminated      | The grade where their 3rd failure occurred.                                            |
+| `academic_year`           | INT64  | Year of the 3rd failure                  | Marks the year they exit the school.                                                   |
+| `reason`                  | STRING | Explanation, e.g. `Failed 3× in grade 4` | Helps categorize termination causes.                                                   |

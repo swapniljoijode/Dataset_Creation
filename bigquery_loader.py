@@ -34,7 +34,7 @@ def upload_all_to_bq(grade_df, students_df, academic_df, grads_df, term_df,
         print(f"Uploaded {len(df)} rows to {table_ref}")
 
     _upload(grade_df,    "grades")
-    _upload(students_df, "students")
+    _upload(students_df.drop(columns=["last_pct","fail_count","terminated"]), "students")
     _upload(academic_df, "academic")
     _upload(grads_df,    "graduates")
     _upload(term_df,     "terminated")

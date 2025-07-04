@@ -101,62 +101,69 @@ def generate_student_enrollment(student_details_df, school_start, n):
 def generate_academic_and_events(students_df, grade_df, start_year, end_year):
     academic,grads,term = [],[],[]
     studs = students_df.copy()
-    for year in range(start_year, end_year+1):
-        for idx,st in studs.iterrows():
-            grade = st.starting_grade
-            prev = st.last_pct
-            # class
-            if prev is None: cls=random.choice(["A","B","C","D"])
-            elif prev<30:    cls="D"
-            elif prev>=90:   cls="A"
-            elif prev>=70:   cls="B"
-            elif prev>=55:   cls="C"
-            else:            cls="D"
-            # simulate marks
-            subs=grade_df[grade_df.grade==grade]
-            msum=subs.max_marks.sum()
-            marks=subs.max_marks.apply(lambda m: random.randint(0,m)).tolist()
-            pct=round(sum(marks)/msum*100,2)
-            # record
-            rec={"academic_year":year,"enrollment_id":st.enrollment_id,
-                 "grade":grade,"class":cls,"final_percentage":pct}
-            for i in range(5):
-                rec[f"subject_{i+1}_marks"]=marks[i] if i<len(marks) else None
-            academic.append(rec)
-            # grad/fail/term
-            if grade==8:
-                if pct>=30:
-                    age=year-st.birthdate.year
-                    grads.append({"enrollment_id":st.enrollment_id,
-                                  "first_name":st.first_name,
-                                  "last_name":st.last_name,
-                                  "final_pct":pct,"age":age})
-                    studs.at[idx,"terminated"]=True
-                else:
-                    studs.at[idx,"fail_count"]+=1
-                    studs.at[idx,"last_pct"]=pct
-                    if studs.at[idx,"fail_count"]>=3:
-                        term.append({"enrollment_id":st.enrollment_id,
-                                     "first_name":st.first_name,
-                                     "last_name":st.last_name,
-                                     "grade":grade,"academic_year":year,
-                                     "reason":f"Failed 3× in grade {grade}"})
-                        studs.at[idx,"terminated"]=True
+    for year in range(start_year, end_year + 1):
+        for idx, st in studs.iterrows():
+            grade = st["starting_grade"]
+            prev = st["last_pct"]
+            enrol_id = st["enrollment_id"]
+            if st["enrollment_year"] > year:
+                continue
             else:
-                if pct>=30:
-                    studs.at[idx,"starting_grade"]+=1
-                    studs.at[idx,"fail_count"]=0
-                    studs.at[idx,"last_pct"]=pct
-                else:
-                    studs.at[idx,"fail_count"]+=1
-                    studs.at[idx,"last_pct"]=pct
-                    if studs.at[idx,"fail_count"]>=3:
-                        term.append({"enrollment_id":st.enrollment_id,
-                                     "first_name":st.first_name,
-                                     "last_name":st.last_name,
-                                     "grade":grade,"academic_year":year,
-                                     "reason":f"Failed 3× in grade {grade}"})
+                # class
+                enrol_id+=1
+                if prev is None: cls=random.choice(["A","B","C","D"])
+                elif prev<30:    cls="D"
+                elif prev>=90:   cls="A"
+                elif prev>=70:   cls="B"
+                elif prev>=55:   cls="C"
+                else:            cls="D"
+                # simulate marks
+                subs=grade_df[grade_df.grade==grade]
+                msum=subs.max_marks.sum()
+                marks=subs.max_marks.apply(lambda m: random.randint(0,m)).tolist()
+                pct=round(sum(marks)/msum*100,2)
+                # record
+                rec={"academic_year":year,"enrollment_id":st.enrollment_id,
+                     "grade":grade,"class":cls,"final_percentage":pct}
+                for i in range(5):
+                    rec[f"subject_{i+1}_marks"]=marks[i] if i<len(marks) else None
+                academic.append(rec)
+                # grad/fail/term
+                if grade==8:
+                    if pct>=30:
+                        age=year-st.birthdate.year
+                        grads.append({"enrollment_id":st.enrollment_id,
+                                      "first_name":st.first_name,
+                                      "last_name":st.last_name,
+                                      "final_pct":pct,
+                                      "age":age,
+                                      "Graduation Year": year+1})
                         studs.at[idx,"terminated"]=True
+                    else:
+                        studs.at[idx,"fail_count"]+=1
+                        studs.at[idx,"last_pct"]=pct
+                        if studs.at[idx,"fail_count"]>=3:
+                            term.append({"enrollment_id":st.enrollment_id,
+                                         "first_name":st.first_name,
+                                         "last_name":st.last_name,
+                                         "grade":grade,"academic_year":year,
+                                         "reason":f"Failed 3× in grade {grade}"})
+                            studs.at[idx,"terminated"]=True
+                else:
+                    if pct>=30:
+                        studs.at[idx,"starting_grade"]+=1
+                        studs.at[idx,"fail_count"]=0
+                        studs.at[idx,"last_pct"]=pct
+                    else:
+                        studs.at[idx,"fail_count"]+=1
+                        studs.at[idx,"last_pct"]=pct
+                        if studs.at[idx,"fail_count"]>=3:
+                            term.append({"enrollment_id":st.enrollment_id,
+                                         "first_name":st.first_name,
+                                         "last_name":st.last_name,
+                                         "grade":grade,"academic_year":year,
+                                         "reason":f"Failed 3× in grade {grade}"})
+                            studs.at[idx,"terminated"]=True
         studs=studs[~studs.terminated]
     return (pd.DataFrame(academic),
             pd.DataFrame(grads),

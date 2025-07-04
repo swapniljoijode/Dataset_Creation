@@ -9,7 +9,9 @@ _dependencies = {
     "faker":   "Faker",
     "mimesis": "mimesis",
     "tkinter": "tkinter",
-    "gooey":"gooey"
+    "google.cloud.bigquery":"google-cloud-bigquery",
+    "google.api_core.exceptions":"google.api_core.exceptions",
+    "pyarrow":"pyarrow"
 }
 
 _installed_now = []
@@ -27,10 +29,11 @@ import sys
 from datetime import datetime
 import pandas as pd
 import tkinter as tk
-from tkinter import ttk,messagebox
+from tkinter import ttk,messagebox,filedialog
 from faker import Faker
 from mimesis import Datetime
-from gooey import Gooey, GooeyParser
+from google.cloud import bigquery
+from google.api_core.exceptions import Conflict
 
 fake = Faker()
 dt   = Datetime()
@@ -159,75 +162,195 @@ def generate_academic_and_events(students_df, grade_df, start_year, end_year):
             pd.DataFrame(grads),
             pd.DataFrame(term))
 
+def upload_df_to_bq(df, project_id, dataset_id, table_name):
+    client = bigquery.Client(project=project_id)
+    table_id = f"{project_id}.{dataset_id}.{table_name}"
+    job_config = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+    )
+    job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
+    job.result()
+
+def ensure_bq_dataset(key:str, pid:str, did: str, location: str = "US"):
+    """
+    Create the dataset if it doesn't already exist.
+    """
+    client = bigquery.Client.from_service_account_json(key, project=pid)
+    # Create dataset if needed
+    dataset_ref = f"{pid}.{did}"
+    try:
+        client.get_dataset(dataset_ref)
+    except Exception:
+        client.create_dataset(dataset_ref)
+
+def upload_all_to_bq(grade_df, students_df, academic_df, grads_df, term_df,
+                     project_id, dataset_id, key):
+    client = bigquery.Client.from_service_account_json(key, project=project_id)
+
+    # 1) ensure dataset
+    ensure_bq_dataset(key=key,pid=project_id, did=dataset_id)
+
+    # 2) upload each table (truncating any existing)
+    def _upload(df, table_name):
+        table_ref = f"{project_id}.{dataset_id}.{table_name}"
+        job = client.load_table_from_dataframe(
+            df,
+            table_ref,
+            job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+        )
+        job.result()
+        print(f"Uploaded {len(df)} rows to {table_ref}")
+
+    _upload(grade_df,    "grades")
+    _upload(students_df, "students")
+    _upload(academic_df, "academic")
+    _upload(grads_df,    "graduates")
+    _upload(term_df,     "terminated")
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("📚 School Records Generator")
-        self.geometry("500x450")
+        self.title("School Records Generator")
+        self.geometry("500x500")
         self.resizable(False, False)
 
-        # use the 'clam' theme for nicer widgets
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TLabel", font=("Segoe UI", 10))
-        style.configure("TButton", font=("Segoe UI", 10), padding=6)
-        style.configure("TEntry", font=("Segoe UI", 10))
-        style.map("TButton",
-                  foreground=[("pressed","white"),("active","white")],
-                  background=[("pressed","#1177bb"),("active","#3399dd")])
 
         frm = ttk.Frame(self, padding=20)
         frm.pack(fill="both", expand=True)
 
-        ttk.Label(frm, text="How many students (min 850)?").grid(row=0, column=0, sticky="w")
-        self.entry_students = ttk.Entry(frm); self.entry_students.grid(row=0, column=1, pady=4)
+        # Inputs
+        ttk.Label(frm, text="How many students (max 850)?").grid(row=0, column=0, sticky="w")
+        self.e_students = ttk.Entry(frm); self.e_students.grid(row=0, column=1, pady=4)
 
-        ttk.Label(frm, text="School start year (e.g. 2010):").grid(row=1, column=0, sticky="w")
-        self.entry_startyear    = ttk.Entry(frm); self.entry_startyear.grid(row=1, column=1, pady=4)
+        ttk.Label(frm, text="School start year:").grid(row=1, column=0, sticky="w")
+        self.e_start = ttk.Entry(frm); self.e_start.grid(row=1, column=1, pady=4)
 
         ttk.Label(frm, text="Enter 8 subjects (one per line):").grid(
             row=2, column=0, sticky="nw", pady=4)
-        self.text_subjects = tk.Text(frm, width=30, height=8, font=("Segoe UI",10))
-        self.text_subjects.grid(row=2, column=1, pady=4)
+        self.t_subjects = tk.Text(frm, width=30, height=8); self.t_subjects.grid(row=2, column=1, pady=4)
 
-        self.btn = ttk.Button(frm, text="Generate CSVs", command=self.on_generate)
-        self.btn.grid(row=3, column=0, columnspan=2, pady=15, sticky="ew")
+        # Buttons
+        ttk.Button(frm, text="Generate CSVs", command=self.on_generate).grid(
+            row=3, column=0, columnspan=2, pady=8, sticky="ew")
+        ttk.Button(frm, text="Upload to BigQuery", command=self.on_upload).grid(
+            row=4, column=0, columnspan=2, pady=8, sticky="ew")
 
         self.status = ttk.Label(frm, text="", foreground="#007700")
-        self.status.grid(row=4, column=0, columnspan=2)
-# —————— 3. GUI wiring ——————
+        self.status.grid(row=5, column=0, columnspan=2)
+
+
+
+    def generate_all(self):
+        """Run the core pipeline and return all DataFrames."""
+        n     = int(self.e_students.get())
+        start = int(self.e_start.get())
+        subs  = [s.strip() for s in self.t_subjects.get("1.0", tk.END).splitlines() if s.strip()]
+
+        grade_df = generate_grade_table(subs)
+        det_df   = generate_student_details(n, start)
+        enr_df   = generate_student_enrollment(det_df, start, n)
+        students = (enr_df
+                    .merge(det_df, on="student_id")
+                    .assign(last_pct=None, fail_count=0, terminated=False))
+        acad_df, grads_df, term_df = generate_academic_and_events(
+            students, grade_df, start, datetime.now().year
+        )
+        return grade_df, students, acad_df, grads_df, term_df
+
     def on_generate(self):
         try:
-            n = int(self.entry_students.get())
-            school_start = int(self.entry_startyear.get())
-            subs = [s.strip() for s in self.text_subjects.get("1.0", tk.END).splitlines() if s.strip()]
-            if len(subs) < 8:
-                messagebox.showerror("Error", "Enter at least 8 subjects.")
-                return
-
-            grade_df = generate_grade_table(subs)
-            det_df   = generate_student_details(n, school_start)
-            enr_df   = generate_student_enrollment(det_df, school_start, n)
-            students = (enr_df
-                        .merge(det_df, on="student_id")
-                        .assign(last_pct=None, fail_count=0, terminated=False))
-
-            academic_df, grads_df, term_df = generate_academic_and_events(
-                students, grade_df, school_start, datetime.now().year
-            )
-
+            grade_df, students_df, acad_df, grads_df, term_df = self.generate_all()
             grade_df.to_csv("grades.csv", index=False)
-            students.drop(columns=["last_pct","fail_count","terminated"])\
-                    .to_csv("students.csv", index=False)
-            academic_df.to_csv("academic.csv", index=False)
+            students_df.drop(columns=["last_pct","fail_count","terminated"])\
+                       .to_csv("students.csv", index=False)
+            acad_df.to_csv("academic.csv", index=False)
             grads_df.to_csv("graduates.csv", index=False)
             term_df.to_csv("terminated.csv", index=False)
-
-            messagebox.showinfo("Done", "CSV files generated in working folder.")
+            self.status.config(text="✅ CSVs generated.")
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+    def on_upload(self):
 
+        try:
+            dlg = tk.Toplevel(self)
+            dlg.title("Upload to BigQuery")
+            dlg.geometry("400x180")
+
+            # Use grid for the frame instead of pack
+            frm2 = ttk.Frame(dlg, padding=10)
+            frm2.grid(row=0, column=0, sticky="nsew")
+             # Let the frame expand to fill the dialog
+            dlg.grid_rowconfigure(0, weight=1)
+            dlg.grid_columnconfigure(0, weight=1)
+
+            # Project ID
+            ttk.Label(frm2, text="GCP Project ID:").grid(row=0, column=0, sticky="w")
+            proj = ttk.Entry(frm2);
+            proj.grid(row=0, column=1, pady=5)
+
+            # Dataset ID
+            ttk.Label(frm2, text="Dataset ID:").grid(row=1, column=0, sticky="w")
+            ds = ttk.Entry(frm2);
+            ds.grid(row=1, column=1, pady=5)
+
+            # Service-account key file
+            ttk.Label(frm2, text="Service Account Key:").grid(row=2, column=0, sticky="w")
+            key_path = ttk.Entry(frm2, width=30)
+            key_path.grid(row=2, column=1, pady=5, sticky="w")
+
+            def browse_key():
+                path = filedialog.askopenfilename(
+                    title="Select service account JSON",
+                    filetypes=[("JSON key", "*.json")]
+                )
+                if path:
+                    key_path.delete(0, tk.END)
+                    key_path.insert(0, path)
+
+            ttk.Button(frm2, text="Browse…", command=browse_key) \
+                .grid(row=2, column=2, padx=5, pady=5)
+
+            def do_upload():
+                pid, did, key = proj.get().strip(), ds.get().strip(), key_path.get().strip()
+                if not pid or not did or not key:
+                    messagebox.showerror("Error","All fields required")
+                    return
+                try:
+                    """client = bigquery.Client.from_service_account_json(key, project=pid)
+                    # Create dataset if needed
+                    dataset_ref = f"{pid}.{did}"
+                    try:
+                        client.get_dataset(dataset_ref)
+                    except Exception:
+                        client.create_dataset(dataset_ref)"""
+
+                    # regenerate your DataFrames
+                    grade_df, students_df, academic_df, grads_df, term_df = self.generate_all()
+
+                    # call our helper
+                    ensure_bq_dataset(key=key,pid=pid,did= did)
+                    upload_all_to_bq(
+                        grade_df, students_df, academic_df, grads_df, term_df,
+                        project_id=pid, dataset_id=did, key=key
+                    )
+
+                    messagebox.showinfo("Success", f"Tables written to {pid}.{did}")
+                    dlg.destroy()
+                except Exception as e:
+                    messagebox.showerror("Upload Error", str(e))
+
+            ttk.Button(dlg, text="Upload", command=do_upload).grid(
+                row=2, column=0, columnspan=2, pady=10, padx=10, sticky="ew")
+
+            dlg.transient(self)
+            dlg.grab_set()
+            self.wait_window(dlg)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 # build window
 if __name__ == "__main__":
     App().mainloop()
